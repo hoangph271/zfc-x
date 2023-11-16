@@ -1,4 +1,4 @@
-<!-- Using hx-swap here will still allow us to swap into the inner element, despite not having any triggers -->
-<div hx-sse="connect:/todos/stream swap:message" hx-swap="beforeend">
-
+<div hx-ext="sse" sse-connect="/todos/stream" sse-swap="message">
+  Contents of this box will be updated in real time
+  with every SSE message received from the chatroom.
 </div>

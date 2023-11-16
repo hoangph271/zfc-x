@@ -2,7 +2,7 @@
   <td> {{ todo.id }} </td>
   <td id="shuttle-todo-desc-{{todo.id}}"> {{ todo.description }} </td>
   <td>
-    <button hx-delete="/todos/{{todo.id}}" hx-trigger="click" hx-target="#shuttle-todo-{{todo.id}}" hx-swap="delete">
+    <button hx-delete="/todos/{{todo.id}}" hx-trigger="click">
       Delete
       <span class="htmx-indicator">
         {% include "spinner.html" %}

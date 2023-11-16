@@ -1,7 +1,7 @@
 use axum::{
     extract::{Path, State},
-    http::{StatusCode, Response},
-    response::{sse::Event, IntoResponse, Sse},
+    http::StatusCode,
+    response::{sse::Event, IntoResponse, Response, Sse},
     routing::{delete, get},
     Extension, Form, Router,
 };
@@ -11,7 +11,8 @@ use sqlx::PgPool;
 use std::convert::Infallible;
 use std::time::Duration;
 use tokio::sync::broadcast::{channel, Sender};
-use tokio_stream::{wrappers::BroadcastStream, Stream, StreamExt as _};
+use tokio_stream::wrappers::BroadcastStream;
+use tokio_stream::{Stream, StreamExt as _};
 
 mod dto;
 mod templates;
@@ -20,9 +21,18 @@ use dto::Todo;
 use templates::*;
 
 #[derive(Clone, Serialize, Debug)]
-enum MutationKind {
+pub enum MutationKind {
     Create,
     Delete,
+}
+
+impl MutationKind {
+    fn get_id(&self) -> String {
+        match self {
+            MutationKind::Create => "Create".to_string(),
+            MutationKind::Delete => "Delete".to_string(),
+        }
+    }
 }
 
 #[derive(Clone, Serialize, Debug)]
@@ -40,8 +50,6 @@ struct TodoNew {
 struct AppState {
     db: PgPool,
 }
-
-type TodosStream = Sender<TodoUpdate>;
 
 async fn home() -> impl IntoResponse {
     HelloTemplate
@@ -64,12 +72,13 @@ async fn create_todo(
     .await
     .unwrap();
 
-    if let Err(e) = tx.send(TodoUpdate {
+    if let Err(err) = tx.send(TodoUpdate {
         mutation_kind: MutationKind::Create,
         id: todo.id,
     }) {
+        eprintln!("{:?}", err);
         eprintln!(
-            "Tried to send log of record with ID {} created but something went wrong: {e}",
+            "Record with ID {} was created but nobody's listening to the stream!",
             todo.id
         );
     }
@@ -88,16 +97,23 @@ async fn delete_todo(
         .await
         .unwrap();
 
-    if let Err(e) = tx.send(TodoUpdate {
-        mutation_kind: MutationKind::Delete,
-        id,
-    }) {
-        eprintln!("Tried to send log of record with ID {id} created but something went wrong: {e}");
+    if tx
+        .send(TodoUpdate {
+            mutation_kind: MutationKind::Delete,
+            id,
+        })
+        .is_err()
+    {
+        eprintln!(
+            "Record with ID {} was deleted but nobody's listening to the stream!",
+            id
+        );
     }
 
     StatusCode::OK
 }
 
+type TodosStream = Sender<TodoUpdate>;
 async fn handle_stream(
     Extension(tx): Extension<TodosStream>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
@@ -108,9 +124,23 @@ async fn handle_stream(
         stream
             .map(|msg| {
                 let msg = msg.unwrap();
-                // wrap the message in HTML because htmx expects a HTML fragment response
-                let json = format!("<div>{}</div>", json!(msg));
-                Event::default().data(json)
+
+                // ? TODO: How to update the dom?
+                let data = match msg.mutation_kind {
+                    MutationKind::Create => {
+                        // let content = TodoNewTemplate { todo: todo!() }.to_string();
+
+                        // format!("<div sse-swap='Create' hx-swap='beforeend' target='todos-content'>{}</div>", content)
+                        format!("<div sse-swap='Delete' hx-swap='delete' hx-target='closest #shuttle-todo-{}'></div>", msg.id)
+                    },
+                    MutationKind::Delete => {
+                        format!("<div hx-trigger='load' hx-swap='delete' hx-target='#shuttle-todo-{}'></div>", msg.id)
+                    },
+                };
+
+                Event::default()
+                    .event(msg.mutation_kind.get_id())
+                    .data(data)
             })
             .map(Ok),
     )
@@ -143,7 +173,7 @@ async fn main(#[shuttle_shared_db::Postgres] db: PgPool) -> shuttle_axum::Shuttl
     sqlx::migrate!()
         .run(&db)
         .await
-        .expect("Looks like something went wrong with migrations...!");
+        .expect("Looks like something went wrong with migrations :(");
 
     let (tx, _rx) = channel::<TodoUpdate>(10);
     let state = AppState { db };
